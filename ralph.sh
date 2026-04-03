@@ -1,12 +1,17 @@
 #!/bin/bash
 # Ralph Wiggum - Long-running AI agent loop
-# Usage: ./ralph.sh [--tool amp|claude|kiro] [max_iterations]
+# Usage: ./ralph.sh [--tool amp|claude|kiro] [--branch <name>] [max_iterations]
+#
+# Tracker mode is auto-detected:
+#   - If .beads/ exists in the project root → uses bd (beads)
+#   - Otherwise → uses prd.json (legacy)
 
 set -e
 
 # Parse arguments
-TOOL="amp"  # Default to amp for backwards compatibility
+TOOL="amp"
 MAX_ITERATIONS=10
+BRANCH=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -18,8 +23,15 @@ while [[ $# -gt 0 ]]; do
       TOOL="${1#*=}"
       shift
       ;;
+    --branch)
+      BRANCH="$2"
+      shift 2
+      ;;
+    --branch=*)
+      BRANCH="${1#*=}"
+      shift
+      ;;
     *)
-      # Assume it's max_iterations if it's a number
       if [[ "$1" =~ ^[0-9]+$ ]]; then
         MAX_ITERATIONS="$1"
       fi
@@ -33,42 +45,61 @@ if [[ "$TOOL" != "amp" && "$TOOL" != "claude" && "$TOOL" != "kiro" ]]; then
   echo "Error: Invalid tool '$TOOL'. Must be 'amp', 'claude', or 'kiro'."
   exit 1
 fi
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PRD_FILE="$SCRIPT_DIR/prd.json"
-PROGRESS_FILE="$SCRIPT_DIR/progress.txt"
-ARCHIVE_DIR="$SCRIPT_DIR/archive"
-LAST_BRANCH_FILE="$SCRIPT_DIR/.last-branch"
 
-# Archive previous run if branch changed
-if [ -f "$PRD_FILE" ] && [ -f "$LAST_BRANCH_FILE" ]; then
-  CURRENT_BRANCH=$(jq -r '.branchName // empty' "$PRD_FILE" 2>/dev/null || echo "")
-  LAST_BRANCH=$(cat "$LAST_BRANCH_FILE" 2>/dev/null || echo "")
-  
-  if [ -n "$CURRENT_BRANCH" ] && [ -n "$LAST_BRANCH" ] && [ "$CURRENT_BRANCH" != "$LAST_BRANCH" ]; then
-    # Archive the previous run
-    DATE=$(date +%Y-%m-%d)
-    # Strip "ralph/" prefix from branch name for folder
-    FOLDER_NAME=$(echo "$LAST_BRANCH" | sed 's|^ralph/||')
-    ARCHIVE_FOLDER="$ARCHIVE_DIR/$DATE-$FOLDER_NAME"
-    
-    echo "Archiving previous run: $LAST_BRANCH"
-    mkdir -p "$ARCHIVE_FOLDER"
-    [ -f "$PRD_FILE" ] && cp "$PRD_FILE" "$ARCHIVE_FOLDER/"
-    [ -f "$PROGRESS_FILE" ] && cp "$PROGRESS_FILE" "$ARCHIVE_FOLDER/"
-    echo "   Archived to: $ARCHIVE_FOLDER"
-    
-    # Reset progress file for new run
-    echo "# Ralph Progress Log" > "$PROGRESS_FILE"
-    echo "Started: $(date)" >> "$PROGRESS_FILE"
-    echo "---" >> "$PROGRESS_FILE"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+PROGRESS_FILE="$SCRIPT_DIR/progress.txt"
+
+# Auto-detect tracker mode
+if [ -d "$PROJECT_ROOT/.beads" ]; then
+  TRACKER="bd"
+else
+  TRACKER="prd"
+fi
+
+# --- PRD.JSON (legacy) setup ---
+if [[ "$TRACKER" == "prd" ]]; then
+  PRD_FILE="$SCRIPT_DIR/prd.json"
+  ARCHIVE_DIR="$SCRIPT_DIR/archive"
+  LAST_BRANCH_FILE="$SCRIPT_DIR/.last-branch"
+
+  # Archive previous run if branch changed
+  if [ -f "$PRD_FILE" ] && [ -f "$LAST_BRANCH_FILE" ]; then
+    CURRENT_BRANCH=$(jq -r '.branchName // empty' "$PRD_FILE" 2>/dev/null || echo "")
+    LAST_BRANCH=$(cat "$LAST_BRANCH_FILE" 2>/dev/null || echo "")
+
+    if [ -n "$CURRENT_BRANCH" ] && [ -n "$LAST_BRANCH" ] && [ "$CURRENT_BRANCH" != "$LAST_BRANCH" ]; then
+      DATE=$(date +%Y-%m-%d)
+      FOLDER_NAME=$(echo "$LAST_BRANCH" | sed 's|^ralph/||')
+      ARCHIVE_FOLDER="$ARCHIVE_DIR/$DATE-$FOLDER_NAME"
+
+      echo "Archiving previous run: $LAST_BRANCH"
+      mkdir -p "$ARCHIVE_FOLDER"
+      [ -f "$PRD_FILE" ] && cp -f "$PRD_FILE" "$ARCHIVE_FOLDER/"
+      [ -f "$PROGRESS_FILE" ] && cp -f "$PROGRESS_FILE" "$ARCHIVE_FOLDER/"
+      echo "   Archived to: $ARCHIVE_FOLDER"
+
+      echo "# Ralph Progress Log" > "$PROGRESS_FILE"
+      echo "Started: $(date)" >> "$PROGRESS_FILE"
+      echo "---" >> "$PROGRESS_FILE"
+    fi
+  fi
+
+  # Track current branch
+  if [ -f "$PRD_FILE" ]; then
+    CURRENT_BRANCH=$(jq -r '.branchName // empty' "$PRD_FILE" 2>/dev/null || echo "")
+    if [ -n "$CURRENT_BRANCH" ]; then
+      echo "$CURRENT_BRANCH" > "$LAST_BRANCH_FILE"
+    fi
   fi
 fi
 
-# Track current branch
-if [ -f "$PRD_FILE" ]; then
-  CURRENT_BRANCH=$(jq -r '.branchName // empty' "$PRD_FILE" 2>/dev/null || echo "")
-  if [ -n "$CURRENT_BRANCH" ]; then
-    echo "$CURRENT_BRANCH" > "$LAST_BRANCH_FILE"
+# --- BD (beads) setup ---
+if [[ "$TRACKER" == "bd" ]]; then
+  if [ -z "$BRANCH" ]; then
+    echo "Error: --branch is required when using bd tracker."
+    echo "Usage: ./ralph.sh --tool kiro --branch ralph/my-feature [max_iterations]"
+    exit 1
   fi
 fi
 
@@ -79,32 +110,124 @@ if [ ! -f "$PROGRESS_FILE" ]; then
   echo "---" >> "$PROGRESS_FILE"
 fi
 
-echo "Starting Ralph - Tool: $TOOL - Max iterations: $MAX_ITERATIONS"
+# Select prompt file based on tracker mode
+get_prompt_file() {
+  local tool="$1"
+  local tracker="$2"
+  if [[ "$tracker" == "bd" ]]; then
+    echo "$SCRIPT_DIR/${tool}-bd.md"
+  else
+    case "$tool" in
+      amp)   echo "$SCRIPT_DIR/prompt.md" ;;
+      claude) echo "$SCRIPT_DIR/CLAUDE.md" ;;
+      kiro)  echo "$SCRIPT_DIR/KIRO.md" ;;
+    esac
+  fi
+}
+
+# Map tool name to prompt file name for bd mode
+get_bd_prompt_name() {
+  case "$1" in
+    amp)    echo "amp-bd.md" ;;
+    claude) echo "claude-bd.md" ;;
+    kiro)   echo "kiro-bd.md" ;;
+  esac
+}
+
+PROMPT_FILE=$(get_prompt_file "$TOOL" "$TRACKER")
+
+if [ ! -f "$PROMPT_FILE" ]; then
+  echo "Error: Prompt file not found: $PROMPT_FILE"
+  exit 1
+fi
+
+# Run one iteration with the selected tool
+run_iteration() {
+  local prompt_file="$1"
+  local output=""
+
+  if [[ "$TOOL" == "amp" ]]; then
+    output=$(cat "$prompt_file" | amp --dangerously-allow-all 2>&1 | tee /dev/stderr) || true
+  elif [[ "$TOOL" == "kiro" ]]; then
+    output=$(kiro-cli chat --no-interactive --trust-all-tools "Read and follow the instructions in $prompt_file" 2>&1 | tee /dev/stderr) || true
+  else
+    output=$(claude --dangerously-skip-permissions --print < "$prompt_file" 2>&1 | tee /dev/stderr) || true
+  fi
+
+  echo "$output"
+}
+
+echo "Starting Ralph - Tool: $TOOL - Tracker: $TRACKER - Max iterations: $MAX_ITERATIONS"
+if [[ "$TRACKER" == "bd" ]]; then
+  echo "Branch: $BRANCH"
+fi
+
+# ============================================================
+# PHASE 1: IMPLEMENT
+# ============================================================
+echo ""
+echo "=== PHASE 1: IMPLEMENT ==="
 
 for i in $(seq 1 $MAX_ITERATIONS); do
   echo ""
   echo "==============================================================="
-  echo "  Ralph Iteration $i of $MAX_ITERATIONS ($TOOL)"
+  echo "  Ralph Iteration $i of $MAX_ITERATIONS ($TOOL/$TRACKER)"
   echo "==============================================================="
 
-  # Run the selected tool with the ralph prompt
-  if [[ "$TOOL" == "amp" ]]; then
-    OUTPUT=$(cat "$SCRIPT_DIR/prompt.md" | amp --dangerously-allow-all 2>&1 | tee /dev/stderr) || true
-  elif [[ "$TOOL" == "kiro" ]]; then
-    OUTPUT=$(kiro-cli chat --no-interactive --trust-all-tools "Read and follow the instructions in $SCRIPT_DIR/KIRO.md" 2>&1 | tee /dev/stderr) || true
-  else
-    # Claude Code: use --dangerously-skip-permissions for autonomous operation, --print for output
-    OUTPUT=$(claude --dangerously-skip-permissions --print < "$SCRIPT_DIR/CLAUDE.md" 2>&1 | tee /dev/stderr) || true
-  fi
-  
+  OUTPUT=$(run_iteration "$PROMPT_FILE")
+
   # Check for completion signal
   if echo "$OUTPUT" | grep -q "<promise>COMPLETE</promise>"; then
     echo ""
-    echo "Ralph completed all tasks!"
-    echo "Completed at iteration $i of $MAX_ITERATIONS"
+    echo "Ralph completed all implementation tasks at iteration $i!"
+
+    # If using bd, move to review phase
+    if [[ "$TRACKER" == "bd" ]]; then
+      echo ""
+      echo "=== PHASE 2: PR REVIEW ==="
+
+      # Create PR
+      echo "Creating pull request..."
+      PR_URL=$(cd "$PROJECT_ROOT" && gh pr create --fill --head "$BRANCH" 2>&1) || true
+      echo "PR: $PR_URL"
+
+      REVIEW_PROMPT="$SCRIPT_DIR/review-${TOOL}.md"
+      if [ ! -f "$REVIEW_PROMPT" ]; then
+        echo "No review prompt found at $REVIEW_PROMPT — skipping review phase."
+        exit 0
+      fi
+
+      REVIEW_MAX=$((MAX_ITERATIONS - i))
+      if [ "$REVIEW_MAX" -lt 1 ]; then
+        REVIEW_MAX=1
+      fi
+
+      for j in $(seq 1 $REVIEW_MAX); do
+        echo ""
+        echo "==============================================================="
+        echo "  Ralph Review Iteration $j of $REVIEW_MAX ($TOOL)"
+        echo "==============================================================="
+
+        REVIEW_OUTPUT=$(run_iteration "$REVIEW_PROMPT")
+
+        if echo "$REVIEW_OUTPUT" | grep -q "<promise>REVIEW_COMPLETE</promise>"; then
+          echo ""
+          echo "Ralph completed PR review!"
+          exit 0
+        fi
+
+        echo "Review iteration $j complete. Continuing..."
+        sleep 2
+      done
+
+      echo ""
+      echo "Ralph reached max review iterations without completing review."
+      exit 1
+    fi
+
     exit 0
   fi
-  
+
   echo "Iteration $i complete. Continuing..."
   sleep 2
 done

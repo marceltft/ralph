@@ -1,0 +1,16 @@
+#!/bin/bash
+# ralph-checks.sh - Project-specific quality checks for Ralph
+#
+# Place this file at your project root. Ralph runs it before each commit.
+# Add your project's lint, typecheck, and test commands below.
+# Exit with non-zero status to block the commit.
+#
+# Examples:
+#   yarn lint && yarn typecheck && yarn test
+#   cargo check && cargo test
+#   go vet ./... && go test ./...
+#   ./gradlew check
+
+set -e
+
+# Add your project-specific checks below:
