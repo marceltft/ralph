@@ -1,17 +1,30 @@
-# Ralph PR Review Instructions
+# Ralph MR/PR Review Instructions
 
-You are an autonomous coding agent reviewing a pull request.
+You are an autonomous coding agent addressing merge request / pull request review comments.
 
 ## Your Task
 
-1. Get the current PR number: `gh pr list --head "$(git branch --show-current)" --json number --jq '.[0].number'`
-2. Fetch PR review comments: `gh pr view <number> --json reviews,comments,reviewRequests`
+First, detect which platform this repo uses:
+- If `glab` works and remote is GitLab → use **GitLab** commands
+- If `gh` works and remote is GitHub → use **GitHub** commands
+
+### GitLab (glab)
+
+1. Find the MR: `glab mr list --source-branch "$(git branch --show-current)" -F json | jq '.[0].iid'`
+2. Fetch MR notes: `glab api projects/:id/merge_requests/<iid>/notes --paginate | jq '.[] | select(.system == false) | {id, body, author: .author.username, created_at, resolvable, resolved}'`
+3. Fetch MR discussions: `glab api projects/:id/merge_requests/<iid>/discussions --paginate | jq '.[] | .notes[] | select(.system == false) | {id, body, author: .author.username, position: .position, resolved}'`
+
+### GitHub (gh)
+
+1. Find the PR: `gh pr list --head "$(git branch --show-current)" --json number --jq '.[0].number'`
+2. Fetch comments: `gh pr view <number> --json reviews,comments,reviewRequests`
 3. Fetch inline comments: `gh api repos/{owner}/{repo}/pulls/<number>/comments --jq '.[] | {path, line, body, user: .user.login, id}'`
-4. For each unaddressed comment:
-   - **Code fix needed:** Make the fix, commit with message `fix: address review - [brief description]`
-   - **Discussion/question:** Append your response to `review-responses.md` with the comment context
-5. Push all changes: `git push`
-6. Check if there are any remaining unaddressed comments
+
+### For each unaddressed comment:
+
+- **Code fix needed:** Make the fix, commit with message `fix: address review - [brief description]`
+- **Discussion/question:** Append your response to `review-responses.md` with the comment context
+- Push all changes: `git push`
 
 ## Identifying Unaddressed Comments
 
@@ -19,10 +32,12 @@ A comment is "unaddressed" if:
 - It suggests a code change and the code hasn't been updated
 - It asks a question that hasn't been answered in `review-responses.md`
 - It was posted AFTER the last push (check timestamps)
+- On GitLab: `resolved: false` on a resolvable discussion thread
 
 Ignore:
 - Approval comments with no action items
 - Comments that are just acknowledgments ("LGTM", "looks good")
+- System-generated notes (merge status, pipeline results)
 
 ## Review Response Format
 

@@ -186,10 +186,14 @@ for i in $(seq 1 $MAX_ITERATIONS); do
       echo ""
       echo "=== PHASE 2: PR REVIEW ==="
 
-      # Create PR
-      echo "Creating pull request..."
-      PR_URL=$(cd "$PROJECT_ROOT" && gh pr create --fill --head "$BRANCH" 2>&1) || true
-      echo "PR: $PR_URL"
+      # Create MR/PR (detect platform)
+      echo "Creating merge/pull request..."
+      if cd "$PROJECT_ROOT" && git remote -v 2>/dev/null | grep -q gitlab; then
+        PR_URL=$(glab mr create --fill --source-branch "$BRANCH" 2>&1) || true
+      else
+        PR_URL=$(gh pr create --fill --head "$BRANCH" 2>&1) || true
+      fi
+      echo "MR/PR: $PR_URL"
 
       REVIEW_PROMPT="$SCRIPT_DIR/review-${TOOL}.md"
       if [ ! -f "$REVIEW_PROMPT" ]; then
