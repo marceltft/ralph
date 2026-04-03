@@ -1,6 +1,6 @@
 #!/bin/bash
 # Ralph Wiggum - Long-running AI agent loop
-# Usage: ./ralph.sh [--tool amp|claude|kiro] [--branch <name>] [max_iterations]
+# Usage: ./ralph.sh [--tool amp|claude|kiro] [--branch <name>] [--timeout <minutes>] [max_iterations]
 #
 # Tracker mode is auto-detected:
 #   - If .beads/ exists in the project root → uses bd (beads)
@@ -12,6 +12,8 @@ set -e
 TOOL="amp"
 MAX_ITERATIONS=10
 BRANCH=""
+TIMEOUT_MINUTES=0
+START_TIME=$(date +%s)
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -29,6 +31,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --branch=*)
       BRANCH="${1#*=}"
+      shift
+      ;;
+    --timeout)
+      TIMEOUT_MINUTES="$2"
+      shift 2
+      ;;
+    --timeout=*)
+      TIMEOUT_MINUTES="${1#*=}"
       shift
       ;;
     *)
@@ -141,6 +151,19 @@ if [ ! -f "$PROMPT_FILE" ]; then
   exit 1
 fi
 
+# Check if timeout has been exceeded
+check_timeout() {
+  if [ "$TIMEOUT_MINUTES" -gt 0 ]; then
+    local elapsed=$(( ($(date +%s) - START_TIME) / 60 ))
+    if [ "$elapsed" -ge "$TIMEOUT_MINUTES" ]; then
+      echo ""
+      echo "Ralph reached timeout (${TIMEOUT_MINUTES}m). Elapsed: ${elapsed}m."
+      echo "Check $PROGRESS_FILE for status."
+      exit 1
+    fi
+  fi
+}
+
 # Run one iteration with the selected tool
 run_iteration() {
   local prompt_file="$1"
@@ -158,6 +181,9 @@ run_iteration() {
 }
 
 echo "Starting Ralph - Tool: $TOOL - Tracker: $TRACKER - Max iterations: $MAX_ITERATIONS"
+if [ "$TIMEOUT_MINUTES" -gt 0 ]; then
+  echo "Timeout: ${TIMEOUT_MINUTES} minutes"
+fi
 if [[ "$TRACKER" == "bd" ]]; then
   echo "Branch: $BRANCH"
 fi
@@ -173,6 +199,8 @@ for i in $(seq 1 $MAX_ITERATIONS); do
   echo "==============================================================="
   echo "  Ralph Iteration $i of $MAX_ITERATIONS ($TOOL/$TRACKER)"
   echo "==============================================================="
+
+  check_timeout
 
   OUTPUT=$(run_iteration "$PROMPT_FILE")
 
@@ -211,6 +239,8 @@ for i in $(seq 1 $MAX_ITERATIONS); do
         echo "==============================================================="
         echo "  Ralph Review Iteration $j of $REVIEW_MAX ($TOOL)"
         echo "==============================================================="
+
+        check_timeout
 
         REVIEW_OUTPUT=$(run_iteration "$REVIEW_PROMPT")
 
